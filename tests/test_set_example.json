@@ -1,0 +1,13 @@
+[
+  {
+    "case_id": "case_example_1",
+    "input_data": "Hello LLM world",
+    "expected_output": "Standard output response",
+    "rules": {
+      "length_check": {
+        "min": 5,
+        "max": 100
+      }
+    }
+  }
+]

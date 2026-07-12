@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+.poetry/
+.venv/
+venv/
+
+# Environment and DB
+.env
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Streamlit
+.streamlit/
