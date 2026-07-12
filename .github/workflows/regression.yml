@@ -17,18 +17,23 @@ jobs:
       run: |
         docker build -t llm-eval-harness:latest .
 
+    - name: Create Writable Database Directory
+      run: |
+        mkdir -p ${{ github.workspace }}/db
+        chmod 777 ${{ github.workspace }}/db
+
     - name: Initialize Database
       run: |
-        docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace -e DATABASE_PATH=/workspace/eval.db llm-eval-harness:latest init-db
+        docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace -e DATABASE_PATH=/workspace/db/eval.db llm-eval-harness:latest init-db
 
     - name: Run Baseline Evaluations
       run: |
-        docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace -e DATABASE_PATH=/workspace/eval.db llm-eval-harness:latest run-eval --test-set tests/test_set_example.json --run-id baseline_run --is-baseline
+        docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace -e DATABASE_PATH=/workspace/db/eval.db llm-eval-harness:latest run-eval --test-set tests/test_set_example.json --run-id baseline_run --is-baseline
 
     - name: Run PR Evaluations
       run: |
-        docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace -e DATABASE_PATH=/workspace/eval.db llm-eval-harness:latest run-eval --test-set tests/test_set_example.json --run-id pr_run
+        docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace -e DATABASE_PATH=/workspace/db/eval.db llm-eval-harness:latest run-eval --test-set tests/test_set_example.json --run-id pr_run
 
     - name: Compare for Regressions
       run: |
-        docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace -e DATABASE_PATH=/workspace/eval.db llm-eval-harness:latest compare-regression --run-id pr_run --baseline-id baseline_run
+        docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace -e DATABASE_PATH=/workspace/db/eval.db llm-eval-harness:latest compare-regression --run-id pr_run --baseline-id baseline_run
