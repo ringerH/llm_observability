@@ -1,7 +1,7 @@
 import httpx
 import time
 from typing import Dict, Any, Optional
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log, retry_if_exception
 from eval_harness.config import settings
 from eval_harness import logging
 
@@ -47,8 +47,7 @@ def _should_retry_exception(exception: Exception) -> bool:
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type(LLMError),
-    retry_error_callback=lambda retry_state: None, # Don't hide the original exception
+    retry=retry_if_exception(lambda e: isinstance(e, LLMError) and _should_retry_exception(e)),
     reraise=True,
     before_sleep=before_sleep_log(logging.get_logger(), logging.logging.WARNING)
 )
@@ -59,7 +58,7 @@ def _call_gemini_api(prompt: str, response_json: bool, timeout_sec: float) -> st
     if not settings.GEMINI_API_KEY:
         raise LLMApiError("GEMINI_API_KEY is not configured in settings.")
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
     
     headers = {"Content-Type": "application/json"}
     
@@ -101,7 +100,7 @@ def _call_gemini_api(prompt: str, response_json: bool, timeout_sec: float) -> st
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type(LLMError),
+    retry=retry_if_exception(lambda e: isinstance(e, LLMError) and _should_retry_exception(e)),
     reraise=True,
     before_sleep=before_sleep_log(logging.get_logger(), logging.logging.WARNING)
 )

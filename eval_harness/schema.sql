@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS production_traffic (
     latency_ms REAL NOT NULL,
     cost REAL NOT NULL,
     sampled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_canary BOOLEAN DEFAULT 0,
+    canary_id TEXT,
     FOREIGN KEY (config_hash) REFERENCES prompts_config(config_hash)
 );
 
@@ -77,5 +79,13 @@ CREATE TABLE IF NOT EXISTS production_scores (
     status TEXT NOT NULL, -- 'SUCCESS', 'FAILED'
     evaluated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (request_id, metric_name),
+    FOREIGN KEY (request_id) REFERENCES production_traffic(request_id)
+);
+
+-- 8. Human Review Scores for Agreement Testing
+CREATE TABLE IF NOT EXISTS human_scores (
+    request_id TEXT PRIMARY KEY,
+    human_score REAL NOT NULL,
+    reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (request_id) REFERENCES production_traffic(request_id)
 );

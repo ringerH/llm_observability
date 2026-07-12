@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     SAMPLER_KILL_SWITCH: bool = Field(default=False)
     REGRESSION_THRESHOLD: float = Field(default=0.05)
     ALERT_WEBHOOK_URL: Optional[str] = Field(default=None)
+    MONITOR_ALERT_WEBHOOK_URL: Optional[str] = Field(default=None)
 
     @field_validator("GEMINI_API_KEY", "OPENAI_API_KEY")
     @classmethod

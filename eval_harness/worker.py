@@ -63,20 +63,29 @@ def process_single_request(req: Dict[str, Any]) -> None:
     config_hash = req["config_hash"]
     input_data = req["input_data"]
     actual_output = req["actual_output"]
+    is_canary = req.get("is_canary", 0)
+    canary_id = req.get("canary_id")
 
-    # 1. Fetch rules configuration from database for this config_hash
-    with database.get_db_conn() as conn:
-        config_row = conn.execute(
-            "SELECT parameters FROM prompts_config WHERE config_hash = ?", (config_hash,)
-        ).fetchone()
-
+    # 1. Fetch rules configuration
     rules = {}
-    if config_row:
-        try:
-            params = json.loads(config_row["parameters"])
-            rules = params.get("rules", {})
-        except Exception as e:
-            logging.log_error(f"Failed to parse parameters for config {config_hash}: {e}")
+    canary_info = None
+    if is_canary:
+        from eval_harness.canary_lib import get_canary_by_id
+        canary_info = get_canary_by_id(canary_id) if canary_id else None
+        if canary_info:
+            rules = canary_info["rules"]
+    else:
+        with database.get_db_conn() as conn:
+            config_row = conn.execute(
+                "SELECT parameters FROM prompts_config WHERE config_hash = ?", (config_hash,)
+            ).fetchone()
+
+        if config_row:
+            try:
+                params = json.loads(config_row["parameters"])
+                rules = params.get("rules", {})
+            except Exception as e:
+                logging.log_error(f"Failed to parse parameters for config {config_hash}: {e}")
 
     # Fallback to length check if no rules are stored
     if not rules:
@@ -112,6 +121,27 @@ def process_single_request(req: Dict[str, Any]) -> None:
                     explanation=res.explanation,
                     status=res.status
                 )
+                
+                # If this is a canary, verify the grade matches the expectation
+                if canary_info and rule_name in canary_info.get("expected_results", {}):
+                    expected_val = canary_info["expected_results"][rule_name]
+                    mismatch = False
+                    if rule_name == "llm_judge":
+                        if (res.score < 0.5) != (expected_val < 0.5):
+                            mismatch = True
+                    else:
+                        if bool(res.score) != bool(expected_val):
+                            mismatch = True
+
+                    if mismatch:
+                        from eval_harness import alerts
+                        alerts.fire_monitor_broken_alert(
+                            canary_id=canary_id,
+                            category=canary_info.get("category", ""),
+                            metric_name=rule_name,
+                            expected_score=expected_val,
+                            actual_score=res.score
+                        )
             else:
                 logging.log_warn(f"Unknown rule scorer: {rule_name}")
 
@@ -139,7 +169,7 @@ def run_worker_loop():
             with database.get_db_conn() as conn:
                 row = conn.execute(
                     """
-                    SELECT request_id, config_hash, input_data, actual_output, latency_ms, cost 
+                    SELECT request_id, config_hash, input_data, actual_output, latency_ms, cost, is_canary, canary_id 
                     FROM production_traffic 
                     WHERE request_id NOT IN (SELECT DISTINCT request_id FROM production_scores)
                     LIMIT 1
@@ -148,7 +178,7 @@ def run_worker_loop():
 
             if row:
                 req = dict(row)
-                logging.log_info(f"Processing production request {req['request_id']}")
+                logging.log_info(f"Processing production request {req['request_id']} (is_canary: {req.get('is_canary', 0)})")
                 process_single_request(req)
                 logging.log_info(f"Successfully processed production request {req['request_id']}")
             else:

@@ -1,3 +1,8 @@
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import streamlit as st
 import pandas as pd
 import json
@@ -25,7 +30,7 @@ def query_db(query: str, params: tuple = ()) -> pd.DataFrame:
 # Initialize DB connection and fetch basic stats
 st.title("LLM Evaluation & Observability Dashboard")
 
-tab1, tab2 = st.tabs(["CI/CD Offline Evaluations", "Live Production Monitoring"])
+tab1, tab2, tab3 = st.tabs(["CI/CD Offline Evaluations", "Live Production Monitoring", "Human Review & Judge Alignment"])
 
 # ----------------- Tab 1: CI/CD Offline Evaluations -----------------
 with tab1:
@@ -142,13 +147,13 @@ with tab1:
 with tab2:
     st.header("Live Production Metrics")
 
-    # Fetch live traffic summary stats
-    traffic_count_df = query_db("SELECT count(*) as cnt, sum(cost) as total_cost, avg(latency_ms) as avg_lat FROM production_traffic")
+    # Fetch live traffic summary stats (exclude canaries)
+    traffic_count_df = query_db("SELECT count(*) as cnt, sum(cost) as total_cost, avg(latency_ms) as avg_lat FROM production_traffic WHERE is_canary = 0")
     total_reqs = traffic_count_df.iloc[0]["cnt"]
     total_prod_cost = traffic_count_df.iloc[0]["total_cost"] or 0.0
     avg_prod_lat = traffic_count_df.iloc[0]["avg_lat"] or 0.0
 
-    # Calculate rolling regression rate
+    # Calculate rolling regression rate (exclude canaries internally handled in database.py)
     rolling_regression_rate = database.get_rolling_regression_rate(limit=100, threshold=settings.REGRESSION_THRESHOLD)
 
     # Key Performance Indicators Layout
@@ -176,15 +181,24 @@ with tab2:
             else:
                 st.error("Failed to send webhook alert.")
 
+    # Observability Monitor Health (Canary Verification)
+    st.subheader("Observability Monitor Health (Canary Verification)")
+    recall, fpr, canary_count = database.get_canary_health_metrics()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Canaries Processed", canary_count)
+    c2.metric("Canary Recall (Caught Rate)", f"{recall:.2%}", delta="Expected: 100.0%", delta_color="normal" if recall >= 1.0 else "inverse")
+    c3.metric("Canary False-Positive Rate", f"{fpr:.2%}", delta="Expected: 0.0%", delta_color="normal" if fpr <= 0.0 else "inverse")
+
     # Historical trends
     st.subheader("Performance Trends")
     
-    # Cost, Latency and quality score trends over time
+    # Cost, Latency and quality score trends over time (exclude canaries)
     trends_df = query_db(
         """
         SELECT t.sampled_at, t.latency_ms, t.cost, avg(s.score) as avg_score
         FROM production_traffic t
         LEFT JOIN production_scores s ON t.request_id = s.request_id
+        WHERE t.is_canary = 0
         GROUP BY t.request_id
         ORDER BY t.sampled_at ASC
         """
@@ -207,13 +221,122 @@ with tab2:
         st.write("**Accumulated Token Cost ($)**")
         st.area_chart(trends_df["cost"].cumsum())
 
-    # Raw Production Traffic Log explorer
+    # Raw Production Traffic Log explorer (exclude canaries)
     st.subheader("Sampled Logs Explorer")
     prod_logs_df = query_db(
         """
         SELECT t.request_id, t.config_hash, t.input_data, t.actual_output, t.latency_ms, t.cost, t.sampled_at
         FROM production_traffic t
+        WHERE t.is_canary = 0
         ORDER BY t.sampled_at DESC
         """
     )
     st.dataframe(prod_logs_df, use_container_width=True)
+
+# ----------------- Tab 3: Human Review & Judge Alignment -----------------
+with tab3:
+    st.header("Human Review & Judge Alignment Portal")
+    
+    # 1. Blind Human Review Section
+    st.subheader("Blind Human Evaluation Queue")
+    
+    # Stratified sample queue
+    sample_records = database.get_human_review_samples(limit=1)
+    
+    if not sample_records:
+        st.info("No pending requests in the review queue. Run more live production requests first.")
+    else:
+        sample = sample_records[0]
+        req_id = sample["request_id"]
+        
+        with st.form("human_evaluation_form"):
+            st.write(f"**Request ID:** `{req_id}`")
+            st.write("**User Input Prompt:**")
+            st.code(sample["input_data"])
+            
+            st.write("**AI Assistant Response:**")
+            st.info(sample["actual_output"])
+            
+            st.write("Rate this response:")
+            cols = st.columns(2)
+            is_pass = cols.radio("Verdict:", ["Pass", "Fail"], index=0)
+            score_slider = cols.slider("Score (optional detail):", 0.0, 1.0, 1.0 if is_pass == "Pass" else 0.0)
+            
+            submitted = st.form_submit_button("Submit Grade")
+            if submitted:
+                # Save review
+                database.save_human_score(req_id, score_slider)
+                st.success("Human grade successfully logged!")
+                st.experimental_rerun()
+
+    # 2. Judge Alignment Statistics Section
+    st.subheader("Judge Alignment Statistics")
+    
+    comparison_data = database.get_human_judge_comparison_data()
+    if not comparison_data:
+        st.info("Submit some human grades in the blind review queue above to calculate alignment statistics.")
+    else:
+        df_comp = pd.DataFrame(comparison_data)
+        
+        # Binary classifications (threshold at 0.5)
+        df_comp["human_binary"] = df_comp["human_score"] >= 0.5
+        df_comp["judge_binary"] = df_comp["judge_score"] >= 0.5
+        
+        # Calculate agreement metrics
+        from typing import List
+        def cohens_kappa(h_binary: List[bool], j_binary: List[bool]) -> float:
+            n = len(h_binary)
+            if n == 0:
+                return 1.0
+            p_o = sum(h == j for h, j in zip(h_binary, j_binary)) / n
+            h_pass = sum(h_binary) / n
+            j_pass = sum(j_binary) / n
+            p_e = (h_pass * j_pass) + ((1.0 - h_pass) * (1.0 - j_pass))
+            if p_e >= 1.0:
+                return 1.0
+            return (p_o - p_e) / (1.0 - p_e)
+            
+        def pearson_corr(x: List[float], y: List[float]) -> float:
+            n = len(x)
+            if n <= 1:
+                return 1.0
+            mean_x = sum(x) / n
+            mean_y = sum(y) / n
+            num = sum((xi - mean_x) * (yi - mean_y) for xi, yi in zip(x, y))
+            den_x = sum((xi - mean_x) ** 2 for xi in x)
+            den_y = sum((yi - mean_y) ** 2 for yi in y)
+            if den_x == 0 or den_y == 0:
+                return 0.0
+            return num / ((den_x * den_y) ** 0.5)
+
+        kappa = cohens_kappa(df_comp["human_binary"].tolist(), df_comp["judge_binary"].tolist())
+        correlation = pearson_corr(df_comp["human_score"].tolist(), df_comp["judge_score"].tolist())
+        
+        # Alert display
+        if kappa < 0.6:
+            st.error(f"⚠️ CRITICAL DRIFT: LLM Judge Needs Review! Cohen's Kappa = {kappa:.2f} (Target >= 0.6)")
+        else:
+            st.success(f"✅ ALIGNED: LLM Judge meets alignment targets. Cohen's Kappa = {kappa:.2f}")
+
+        # Metrics cards
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Total Reviewed Items", len(df_comp))
+        m2.metric("Cohen's Kappa (Agreement)", f"{kappa:.2f}", delta="Target: >= 0.6", delta_color="normal" if kappa >= 0.6 else "inverse")
+        m3.metric("Pearson Correlation Coefficient", f"{correlation:.2f}")
+
+        # Breakdown of disagreements
+        st.subheader("Disagreement Classification Breakdown")
+        
+        # Categorize matches and errors
+        too_strict = df_comp[(df_comp["human_binary"] == True) & (df_comp["judge_binary"] == False)]
+        too_lenient = df_comp[(df_comp["human_binary"] == False) & (df_comp["judge_binary"] == True)]
+        exact_agreements = df_comp[df_comp["human_binary"] == df_comp["judge_binary"]]
+        
+        b1, b2, b3 = st.columns(3)
+        b1.metric("Exact Agreements", f"{len(exact_agreements)}", delta=f"{len(exact_agreements)/len(df_comp):.1%}")
+        b2.metric("Judge Too Strict (False Negatives)", f"{len(too_strict)}", delta=f"{len(too_strict)/len(df_comp):.1%}", delta_color="inverse")
+        b3.metric("Judge Too Lenient (False Positives)", f"{len(too_lenient)}", delta=f"{len(too_lenient)/len(df_comp):.1%}", delta_color="inverse")
+        
+        # Disagreement breakdown display table
+        st.subheader("Raw Human vs Judge Scores Table")
+        st.dataframe(df_comp[["request_id", "human_score", "judge_score", "human_binary", "judge_binary"]], use_container_width=True)

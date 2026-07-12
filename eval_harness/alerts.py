@@ -38,3 +38,38 @@ def fire_webhook_alert(rolling_regression_rate: float, threshold: float) -> bool
     except Exception as e:
         logging.log_error(f"Failed to transmit alert webhook: {e}", exc_info=e)
         return False
+
+def fire_monitor_broken_alert(canary_id: str, category: str, metric_name: str, expected_score: float, actual_score: float) -> bool:
+    """
+    Sends a POST request to MONITOR_ALERT_WEBHOOK_URL notifying that a canary verification failed.
+    """
+    if not settings.MONITOR_ALERT_WEBHOOK_URL:
+        logging.log_warn("Monitor alert trigger skipped: MONITOR_ALERT_WEBHOOK_URL is not configured.")
+        return False
+
+    payload = {
+        "event": "MONITOR_BROKEN_ALERT",
+        "message": f"CRITICAL: Observability Monitor is Broken! Canary check '{canary_id}' failed expected outcome.",
+        "canary_id": canary_id,
+        "category": category,
+        "metric_name": metric_name,
+        "expected_score": expected_score,
+        "actual_score": actual_score
+    }
+
+    try:
+        logging.log_info(
+            f"Firing monitor broken alert to {settings.MONITOR_ALERT_WEBHOOK_URL}",
+            canary_id=canary_id,
+            metric_name=metric_name
+        )
+        response = httpx.post(settings.MONITOR_ALERT_WEBHOOK_URL, json=payload, timeout=5.0)
+        if response.status_code in (200, 201, 202, 204):
+            logging.log_info(f"Monitor webhook successfully received: HTTP {response.status_code}")
+            return True
+        else:
+            logging.log_error(f"Monitor webhook returned non-2xx response: HTTP {response.status_code} {response.text}")
+            return False
+    except Exception as e:
+        logging.log_error(f"Failed to transmit monitor alert webhook: {e}", exc_info=e)
+        return False

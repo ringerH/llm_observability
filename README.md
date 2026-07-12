@@ -146,11 +146,6 @@ The pipeline defined in `.github/workflows/regression.yml` automates the followi
 3. Performs a baseline run and a comparison PR run.
 4. Executes the `compare-regression` command, blocking PR merges if quality drops.
 
----
-
 ## Running Verification Tests
 
-Run the full automated test suite containing unit coverage for configuration, schema mappings, scorers, fallback logic, sampling, and background processing:
-```bash
-pytest
-```
+To run automated unit/integration tests, view the full test inventory, or learn how to run end-to-end local simulation runs, refer to the dedicated [TESTING.md](TESTING.md) guide.

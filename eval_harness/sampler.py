@@ -39,6 +39,47 @@ def should_sample() -> bool:
     rate = min(max(0.0, settings.SAMPLING_RATE), settings.MAX_SAMPLING_RATE)
     return random.random() < rate
 
+def inject_canary_record(config_hash: str, canary_id: Optional[str] = None) -> Optional[str]:
+    """
+    Selects a canary case and inserts it into the production_traffic queue.
+    """
+    from eval_harness.canary_lib import CANARIES
+    if canary_id:
+        canary = next((c for c in CANARIES if c["canary_id"] == canary_id), None)
+    else:
+        canary = random.choice(CANARIES)
+
+    if not canary:
+        return None
+
+    request_id = f"canary_{uuid.uuid4().hex[:12]}"
+    
+    try:
+        with database.get_db_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO production_traffic (request_id, config_hash, input_data, actual_output, latency_ms, cost, is_canary, canary_id)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+                """,
+                (request_id, config_hash, canary["input_data"], canary["actual_output"], 120.0, 0.000075, canary["canary_id"])
+            )
+        logging.log_info(
+            f"Successfully injected canary request {request_id} ({canary['canary_id']})",
+            run_id=None,
+            case_id=None,
+            request_id=request_id,
+            config_hash=config_hash
+        )
+        return request_id
+    except Exception as e:
+        logging.log_error(
+            f"Failed to inject canary request: {e}",
+            run_id=None,
+            case_id=None,
+            exc_info=e
+        )
+        return None
+
 def log_production_traffic(
     config_hash: str,
     input_data: str,
@@ -73,6 +114,11 @@ def log_production_traffic(
             request_id=request_id,
             config_hash=config_hash
         )
+        
+        # Inject a canary request with 20% probability
+        if random.random() < 0.2:
+            inject_canary_record(config_hash)
+
         return request_id
     except Exception as e:
         logging.log_error(
